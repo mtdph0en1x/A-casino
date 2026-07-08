@@ -3,7 +3,7 @@ import random
 from datetime import datetime
 from typing import Optional
 from enum import Enum
-from azure.data.tables import TableServiceClient, UpdateMode
+from azure.data.tables import TableServiceClient, UpdateMode, EntityProperty, EdmType
 from azure.core.exceptions import ResourceNotFoundError
 
 # ---------------------------------------------------------------------------
@@ -18,6 +18,20 @@ bets_client = None
 votes_client = None
 events_client = None
 eventbets_client = None
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+def _safe(entity: dict) -> dict:
+    """
+    Azure SDK tries to cast ints to Edm.Int32 by default and crashes 
+    if they exceed 32 bits (like Telegram Group chat_ids). 
+    This explicitly forces large ints into Edm.Int64.
+    """
+    for k, v in entity.items():
+        if isinstance(v, int) and (v > 2147483647 or v < -2147483648):
+            entity[k] = EntityProperty(v, EdmType.INT64)
+    return entity
 
 # ---------------------------------------------------------------------------
 # Schema init
@@ -54,7 +68,7 @@ def get_or_create_user(user_id: int, username: Optional[str], first_name: str):
         if user.get("username") != username or user.get("first_name") != first_name:
             user["username"] = username or ""
             user["first_name"] = first_name
-            users_client.upsert_entity(user)
+            users_client.upsert_entity(_safe(user))
         return user
     except ResourceNotFoundError:
         user = {
@@ -65,7 +79,7 @@ def get_or_create_user(user_id: int, username: Optional[str], first_name: str):
             "first_name": first_name,
             "balance": 1.0
         }
-        users_client.upsert_entity(user)
+        users_client.upsert_entity(_safe(user))
         return user
 
 def get_user(user_id: int):
@@ -78,7 +92,6 @@ def get_user_by_username(username: str):
     if not username: return None
     username_clean = username.lstrip("@").lower()
     
-    # FIX: Use list_entities() instead of query_entities("") to prevent crashes!
     users = list(users_client.list_entities())
     for u in users:
         if u.get("username") and u["username"].lower() == username_clean:
@@ -96,8 +109,8 @@ def transfer_balance(winner_id: int, loser_id: int, amount: float) -> None:
     if winner and loser:
         winner["balance"] += amount
         loser["balance"] -= amount
-        users_client.upsert_entity(winner)
-        users_client.upsert_entity(loser)
+        users_client.upsert_entity(_safe(winner))
+        users_client.upsert_entity(_safe(loser))
 
 
 # ---------------------------------------------------------------------------
@@ -132,7 +145,7 @@ def create_bet(
         "created_at": datetime.utcnow().isoformat(),
         "resolved_at": ""
     }
-    bets_client.upsert_entity(bet)
+    bets_client.upsert_entity(_safe(bet))
     return bet_id
 
 def get_bet(bet_id: int):
@@ -167,7 +180,7 @@ def update_bet(bet_id: int, **fields) -> None:
             if isinstance(v, Enum):
                 v = v.value
             bet[k] = v
-        bets_client.upsert_entity(bet)
+        bets_client.upsert_entity(_safe(bet))
 
 
 # ---------------------------------------------------------------------------
@@ -179,7 +192,7 @@ def add_vote(bet_id: int, voter_id: int, voted_for_id: int) -> None:
         "RowKey": str(voter_id),
         "voted_for_id": voted_for_id
     }
-    votes_client.upsert_entity(vote)
+    votes_client.upsert_entity(_safe(vote))
 
 def get_votes(bet_id: int):
     query = f"PartitionKey eq '{bet_id}'"
@@ -214,7 +227,7 @@ def create_event(chat_id: int, creator_id: int, description: str) -> int:
         "resolved_at": "",
         "message_id": 0
     }
-    events_client.upsert_entity(event)
+    events_client.upsert_entity(_safe(event))
     return event_id
 
 def get_event(event_id: int):
@@ -228,11 +241,9 @@ def update_event(event_id: int, **fields):
         for k, v in fields.items():
             if v is not None:
                 event[k] = v
-        events_client.upsert_entity(event)
+        events_client.upsert_entity(_safe(event))
 
 def place_event_bet(event_id: int, user_id: int, side: str, amount: float):
-    # Retrieve existing bet if any to append or replace?
-    # We will just upsert it (replace). If they bet again, it overrides their previous bet.
     bet = {
         "PartitionKey": str(event_id),
         "RowKey": str(user_id),
@@ -240,7 +251,7 @@ def place_event_bet(event_id: int, user_id: int, side: str, amount: float):
         "side": side.upper(),
         "amount": float(amount)
     }
-    eventbets_client.upsert_entity(bet)
+    eventbets_client.upsert_entity(_safe(bet))
 
 def get_event_bets(event_id: int):
     query = f"PartitionKey eq '{event_id}'"
@@ -274,13 +285,13 @@ def resolve_event(event_id: int, winning_side: str) -> dict:
             user = get_user(w["user_id"])
             if user:
                 user["balance"] += won_amount
-                users_client.upsert_entity(user)
+                users_client.upsert_entity(_safe(user))
                 
         for l in losers:
             user = get_user(l["user_id"])
             if user:
                 user["balance"] -= l["amount"]
-                users_client.upsert_entity(user)
+                users_client.upsert_entity(_safe(user))
 
     update_event(event_id, status=f"RESOLVED_{winning_side}", resolved_at=datetime.utcnow().isoformat())
     
