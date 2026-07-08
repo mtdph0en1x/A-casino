@@ -16,6 +16,7 @@ import database as db
 from handlers.bets import bet_command, bet_callback, bets_command
 from handlers.resolve import claim_command, resolve_callback, vote_callback
 from handlers.stats import balance_command, leaderboard_command, history_command
+from handlers.events import event_command, beton_command, resolve_event_command, event_callback
 
 # ---------------------------------------------------------------------------
 # Logging
@@ -61,6 +62,10 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         "/bets — активні парі\n\n"
         "<b>Вирішення:</b>\n"
         "/claim &lt;id&gt; — заявити що ти виграв\n\n"
+        "<b>Групові події (Пул):</b>\n"
+        "/event умова — створити подію\n"
+        "/beton &lt;id&gt; за 0.5 — поставити\n"
+        "/resolve &lt;id&gt; за — завершити (автор)\n\n"
         "<b>Статистика:</b>\n"
         "/balance — твій баланс\n"
         "/ass — теж баланс 😄\n"
@@ -104,6 +109,11 @@ ptb_app.add_handler(CommandHandler("help",        help_command))
 ptb_app.add_handler(CommandHandler("bet",         bet_command))
 ptb_app.add_handler(CommandHandler("bets",        bets_command))
 
+# Group Events
+ptb_app.add_handler(CommandHandler("event",       event_command))
+ptb_app.add_handler(CommandHandler("beton",       beton_command))
+ptb_app.add_handler(CommandHandler("resolve",     resolve_event_command))
+
 # Resolve
 ptb_app.add_handler(CommandHandler("claim",       claim_command))
 
@@ -117,6 +127,7 @@ ptb_app.add_handler(CommandHandler("history",     history_command))
 ptb_app.add_handler(CallbackQueryHandler(bet_callback,     pattern=r"^b[ad]\|"))
 ptb_app.add_handler(CallbackQueryHandler(resolve_callback, pattern=r"^b(c|di)\|"))
 ptb_app.add_handler(CallbackQueryHandler(vote_callback,    pattern=r"^bv\|"))
+ptb_app.add_handler(CallbackQueryHandler(event_callback,   pattern=r"^ev\|"))
 
 # Auto-register users who chat (so @mentions work)
 ptb_app.add_handler(

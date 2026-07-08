@@ -16,6 +16,8 @@ table_service_client = None
 users_client = None
 bets_client = None
 votes_client = None
+events_client = None
+eventbets_client = None
 
 # ---------------------------------------------------------------------------
 # Schema init
@@ -25,11 +27,11 @@ def init_db() -> None:
         print("Warning: AZURE_STORAGE_CONNECTION_STRING not set!")
         return
 
-    global table_service_client, users_client, bets_client, votes_client
+    global table_service_client, users_client, bets_client, votes_client, events_client, eventbets_client
     table_service_client = TableServiceClient.from_connection_string(conn_str=CONN_STR)
     
     # Ensure tables exist
-    for table_name in ["users", "bets", "votes"]:
+    for table_name in ["users", "bets", "votes", "events", "eventbets"]:
         table_client = table_service_client.get_table_client(table_name)
         try:
             table_client.create_table()
@@ -39,6 +41,8 @@ def init_db() -> None:
     users_client = table_service_client.get_table_client("users")
     bets_client = table_service_client.get_table_client("bets")
     votes_client = table_service_client.get_table_client("votes")
+    events_client = table_service_client.get_table_client("events")
+    eventbets_client = table_service_client.get_table_client("eventbets")
 
 
 # ---------------------------------------------------------------------------
@@ -74,14 +78,15 @@ def get_user_by_username(username: str):
     if not username: return None
     username_clean = username.lstrip("@").lower()
     
-    users = list(users_client.query_entities(""))
+    # FIX: Use list_entities() instead of query_entities("") to prevent crashes!
+    users = list(users_client.list_entities())
     for u in users:
         if u.get("username") and u["username"].lower() == username_clean:
             return u
     return None
 
 def get_all_users_ranked():
-    users = list(users_client.query_entities(""))
+    users = list(users_client.list_entities())
     users.sort(key=lambda x: x.get("balance", 0.0), reverse=True)
     return users
 
@@ -96,7 +101,7 @@ def transfer_balance(winner_id: int, loser_id: int, amount: float) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Bet operations
+# 1v1 Bet operations
 # ---------------------------------------------------------------------------
 def create_bet(
     chat_id: int,
@@ -183,3 +188,107 @@ def get_votes(bet_id: int):
 def count_votes_for(bet_id: int, candidate_id: int) -> int:
     votes = get_votes(bet_id)
     return sum(1 for v in votes if v.get("voted_for_id") == candidate_id)
+
+
+# ---------------------------------------------------------------------------
+# Group Events (Pool Betting) operations
+# ---------------------------------------------------------------------------
+def create_event(chat_id: int, creator_id: int, description: str) -> int:
+    event_id = random.randint(100000, 999999)
+    while True:
+        try:
+            events_client.get_entity(partition_key=str(chat_id), row_key=str(event_id))
+            event_id = random.randint(100000, 999999)
+        except ResourceNotFoundError:
+            break
+
+    event = {
+        "PartitionKey": str(chat_id),
+        "RowKey": str(event_id),
+        "id": event_id,
+        "chat_id": chat_id,
+        "creator_id": creator_id,
+        "description": description,
+        "status": "OPEN",
+        "created_at": datetime.utcnow().isoformat(),
+        "resolved_at": "",
+        "message_id": 0
+    }
+    events_client.upsert_entity(event)
+    return event_id
+
+def get_event(event_id: int):
+    query = f"RowKey eq '{event_id}'"
+    results = list(events_client.query_entities(query))
+    return results[0] if results else None
+
+def update_event(event_id: int, **fields):
+    event = get_event(event_id)
+    if event:
+        for k, v in fields.items():
+            if v is not None:
+                event[k] = v
+        events_client.upsert_entity(event)
+
+def place_event_bet(event_id: int, user_id: int, side: str, amount: float):
+    # Retrieve existing bet if any to append or replace?
+    # We will just upsert it (replace). If they bet again, it overrides their previous bet.
+    bet = {
+        "PartitionKey": str(event_id),
+        "RowKey": str(user_id),
+        "user_id": user_id,
+        "side": side.upper(),
+        "amount": float(amount)
+    }
+    eventbets_client.upsert_entity(bet)
+
+def get_event_bets(event_id: int):
+    query = f"PartitionKey eq '{event_id}'"
+    return list(eventbets_client.query_entities(query))
+
+def resolve_event(event_id: int, winning_side: str) -> dict:
+    event = get_event(event_id)
+    if not event or event.get("status") != "OPEN":
+        return None
+
+    bets = get_event_bets(event_id)
+    winning_side = winning_side.upper()
+    
+    if winning_side == "CANCEL":
+        update_event(event_id, status="CANCELED", resolved_at=datetime.utcnow().isoformat())
+        return {"status": "CANCELED"}
+    
+    for_pool = sum(b["amount"] for b in bets if b["side"] == "FOR")
+    against_pool = sum(b["amount"] for b in bets if b["side"] == "AGAINST")
+    
+    winners = [b for b in bets if b["side"] == winning_side]
+    losers = [b for b in bets if b["side"] != winning_side]
+    
+    winning_pool = sum(b["amount"] for b in winners)
+    losing_pool = sum(b["amount"] for b in losers)
+    
+    if winning_pool > 0 and losing_pool > 0:
+        for w in winners:
+            share = w["amount"] / winning_pool
+            won_amount = share * losing_pool
+            user = get_user(w["user_id"])
+            if user:
+                user["balance"] += won_amount
+                users_client.upsert_entity(user)
+                
+        for l in losers:
+            user = get_user(l["user_id"])
+            if user:
+                user["balance"] -= l["amount"]
+                users_client.upsert_entity(user)
+
+    update_event(event_id, status=f"RESOLVED_{winning_side}", resolved_at=datetime.utcnow().isoformat())
+    
+    return {
+        "status": f"RESOLVED_{winning_side}",
+        "for_pool": for_pool,
+        "against_pool": against_pool,
+        "winners_count": len(winners),
+        "losers_count": len(losers),
+        "losing_pool": losing_pool
+    }
