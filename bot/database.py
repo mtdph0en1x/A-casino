@@ -33,6 +33,25 @@ def _safe(entity: dict) -> dict:
             entity[k] = EntityProperty(v, EdmType.INT64)
     return entity
 
+def _unwrap(entity):
+    """
+    When retrieving entities, Azure Table SDK might return Edm.Int64 
+    as an EntityProperty object. This unwraps them back into plain ints.
+    """
+    if not entity: return entity
+    for k, v in list(entity.items()):
+        if hasattr(v, "value"):
+            entity[k] = v.value
+        elif isinstance(v, str) and (k.endswith("_id") or k == "id"):
+            try:
+                entity[k] = int(v)
+            except ValueError:
+                pass
+    return entity
+
+def _unwrap_list(entities):
+    return [_unwrap(e) for e in entities]
+
 # ---------------------------------------------------------------------------
 # Schema init
 # ---------------------------------------------------------------------------
@@ -44,13 +63,12 @@ def init_db() -> None:
     global table_service_client, users_client, bets_client, votes_client, events_client, eventbets_client
     table_service_client = TableServiceClient.from_connection_string(conn_str=CONN_STR)
     
-    # Ensure tables exist
     for table_name in ["users", "bets", "votes", "events", "eventbets"]:
         table_client = table_service_client.get_table_client(table_name)
         try:
             table_client.create_table()
         except Exception:
-            pass # Table already exists
+            pass 
 
     users_client = table_service_client.get_table_client("users")
     bets_client = table_service_client.get_table_client("bets")
@@ -65,6 +83,7 @@ def init_db() -> None:
 def get_or_create_user(user_id: int, username: Optional[str], first_name: str):
     try:
         user = users_client.get_entity(partition_key="Users", row_key=str(user_id))
+        user = _unwrap(user)
         if user.get("username") != username or user.get("first_name") != first_name:
             user["username"] = username or ""
             user["first_name"] = first_name
@@ -80,11 +99,11 @@ def get_or_create_user(user_id: int, username: Optional[str], first_name: str):
             "balance": 1.0
         }
         users_client.upsert_entity(_safe(user))
-        return user
+        return _unwrap(user)
 
 def get_user(user_id: int):
     try:
-        return users_client.get_entity(partition_key="Users", row_key=str(user_id))
+        return _unwrap(users_client.get_entity(partition_key="Users", row_key=str(user_id)))
     except ResourceNotFoundError:
         return None
 
@@ -94,12 +113,13 @@ def get_user_by_username(username: str):
     
     users = list(users_client.list_entities())
     for u in users:
+        u = _unwrap(u)
         if u.get("username") and u["username"].lower() == username_clean:
             return u
     return None
 
 def get_all_users_ranked():
-    users = list(users_client.list_entities())
+    users = _unwrap_list(list(users_client.list_entities()))
     users.sort(key=lambda x: x.get("balance", 0.0), reverse=True)
     return users
 
@@ -124,7 +144,6 @@ def create_bet(
     description: str,
 ) -> int:
     bet_id = random.randint(100000, 999999)
-    # Ensure ID uniqueness
     while True:
         try:
             bets_client.get_entity(partition_key=str(chat_id), row_key=str(bet_id))
@@ -151,11 +170,11 @@ def create_bet(
 def get_bet(bet_id: int):
     query = f"RowKey eq '{bet_id}'"
     results = list(bets_client.query_entities(query))
-    return results[0] if results else None
+    return _unwrap(results[0]) if results else None
 
 def get_active_bets(chat_id: int):
     query = f"PartitionKey eq '{chat_id}'"
-    results = list(bets_client.query_entities(query))
+    results = _unwrap_list(list(bets_client.query_entities(query)))
     active_statuses = {"PROPOSED", "ACTIVE", "CLAIMED", "DISPUTED"}
     return sorted(
         [b for b in results if b.get("status") in active_statuses], 
@@ -165,7 +184,7 @@ def get_active_bets(chat_id: int):
 
 def get_bet_history(chat_id: int, limit: int = 10):
     query = f"PartitionKey eq '{chat_id}'"
-    results = list(bets_client.query_entities(query))
+    results = _unwrap_list(list(bets_client.query_entities(query)))
     resolved_statuses = {"CONFIRMED", "DECLINED"}
     history = [b for b in results if b.get("status") in resolved_statuses]
     history.sort(key=lambda x: x.get("resolved_at", ""), reverse=True)
@@ -196,7 +215,7 @@ def add_vote(bet_id: int, voter_id: int, voted_for_id: int) -> None:
 
 def get_votes(bet_id: int):
     query = f"PartitionKey eq '{bet_id}'"
-    return list(votes_client.query_entities(query))
+    return _unwrap_list(list(votes_client.query_entities(query)))
 
 def count_votes_for(bet_id: int, candidate_id: int) -> int:
     votes = get_votes(bet_id)
@@ -233,7 +252,7 @@ def create_event(chat_id: int, creator_id: int, description: str) -> int:
 def get_event(event_id: int):
     query = f"RowKey eq '{event_id}'"
     results = list(events_client.query_entities(query))
-    return results[0] if results else None
+    return _unwrap(results[0]) if results else None
 
 def update_event(event_id: int, **fields):
     event = get_event(event_id)
@@ -255,7 +274,7 @@ def place_event_bet(event_id: int, user_id: int, side: str, amount: float):
 
 def get_event_bets(event_id: int):
     query = f"PartitionKey eq '{event_id}'"
-    return list(eventbets_client.query_entities(query))
+    return _unwrap_list(list(eventbets_client.query_entities(query)))
 
 def resolve_event(event_id: int, winning_side: str) -> dict:
     event = get_event(event_id)

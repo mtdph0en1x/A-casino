@@ -80,14 +80,21 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     )
 
 
+_seen_users = {}
+
 async def auto_register(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Silently register any user who writes in the chat."""
-    if update.effective_user:
-        db.get_or_create_user(
-            update.effective_user.id,
-            update.effective_user.username,
-            update.effective_user.first_name,
-        )
+    u = update.effective_user
+    if not u:
+        return
+
+    # Skip DB call if we already verified this user recently
+    cached = _seen_users.get(u.id)
+    if cached == (u.username, u.first_name):
+        return
+
+    db.get_or_create_user(u.id, u.username, u.first_name)
+    _seen_users[u.id] = (u.username, u.first_name)
 
 
 # ---------------------------------------------------------------------------

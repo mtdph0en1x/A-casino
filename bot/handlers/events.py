@@ -103,7 +103,7 @@ async def beton_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         return
         
     try:
-        event_id = int(args[0])
+        event_id = int(args[0].lstrip("#"))
     except ValueError:
         await msg.reply_text("❌ Невірний ID події.")
         return
@@ -175,7 +175,7 @@ async def resolve_event_command(update: Update, context: ContextTypes.DEFAULT_TY
         return
 
     try:
-        event_id = int(args[0])
+        event_id = int(args[0].lstrip("#"))
     except ValueError:
         await msg.reply_text("❌ Невірний ID події.")
         return
