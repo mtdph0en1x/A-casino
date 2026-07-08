@@ -18,8 +18,8 @@ WORKDIR /app
 COPY --from=builder /app/packages /app/packages
 ENV PYTHONPATH=/app/packages
 
-# Copy source
-COPY main.py .
+# Copy all source files (main.py, models.py, database.py, handlers/)
+COPY . .
 
 USER botuser
 

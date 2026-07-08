@@ -3,7 +3,19 @@ import os
 
 from fastapi import FastAPI, Request, Response
 from telegram import Update
-from telegram.ext import Application, CommandHandler, ContextTypes
+from telegram.ext import (
+    Application,
+    CallbackQueryHandler,
+    CommandHandler,
+    ContextTypes,
+    MessageHandler,
+    filters,
+)
+
+import database as db
+from handlers.bets import bet_command, bet_callback, bets_command
+from handlers.resolve import claim_command, resolve_callback, vote_callback
+from handlers.stats import balance_command, leaderboard_command, history_command
 
 # ---------------------------------------------------------------------------
 # Logging
@@ -15,61 +27,112 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
-# Config (injected via environment variables)
+# Config
 # ---------------------------------------------------------------------------
 BOT_TOKEN: str = os.environ["BOT_TOKEN"]
 WEBHOOK_SECRET: str = os.environ.get("WEBHOOK_SECRET", "")
-# Public HTTPS URL of your Container App, e.g. https://my-bot.region.azurecontainerapps.io
 WEBHOOK_URL: str = os.environ["WEBHOOK_URL"]
 
 # ---------------------------------------------------------------------------
-# Bot handlers
+# General command handlers
 # ---------------------------------------------------------------------------
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Handle /start command."""
-    user = update.effective_user
+    user = db.get_or_create_user(
+        update.effective_user.id,
+        update.effective_user.username,
+        update.effective_user.first_name,
+    )
     await update.message.reply_html(
-        f"👋 Hi <b>{user.first_name}</b>!\n\n"
-        "I'm your Telegram bot running on <b>Azure Container Apps</b>.\n\n"
-        "Type /help to see available commands.",
+        f"👋 Привіт, <b>{update.effective_user.first_name}</b>!\n\n"
+        f"Ласкаво просимо до <b>ЖопоБанку</b> 🍑\n\n"
+        f"Твій стартовий баланс: <b>1.0 🍑</b>\n\n"
+        f"Постав жопу на парі та доведи всім хто тут головний!\n\n"
+        f"/help — список команд"
     )
 
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Handle /help command."""
-    help_text = (
-        "🤖 <b>Available Commands</b>\n\n"
-        "/start — Welcome message\n"
-        "/help  — Show this help\n\n"
-        "Feel free to extend me with more commands! 🚀"
+    await update.message.reply_html(
+        "🍑 <b>ЖопоБанк — команди:</b>\n"
+        "━━━━━━━━━━━━━━\n"
+        "<b>Парі:</b>\n"
+        "/bet @user 0.5 умова — запропонувати парі\n"
+        "/bets — активні парі\n\n"
+        "<b>Вирішення:</b>\n"
+        "/claim &lt;id&gt; — заявити що ти виграв\n\n"
+        "<b>Статистика:</b>\n"
+        "/balance — твій баланс\n"
+        "/ass — теж баланс 😄\n"
+        "/leaderboard — рейтинг\n"
+        "/history — минулі парі\n\n"
+        "<b>Як це працює:</b>\n"
+        "1️⃣ /bet @friend 0.5 Динамо виграє\n"
+        "2️⃣ Друг натискає ✅ Ставлю!\n"
+        "3️⃣ Після події переможець пише /claim\n"
+        "4️⃣ Інший підтверджує або оскаржує\n"
+        "5️⃣ При суперечці — голосує чат 🗳️"
     )
-    await update.message.reply_html(help_text)
+
+
+async def auto_register(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Silently register any user who writes in the chat."""
+    if update.effective_user:
+        db.get_or_create_user(
+            update.effective_user.id,
+            update.effective_user.username,
+            update.effective_user.first_name,
+        )
 
 
 # ---------------------------------------------------------------------------
-# Application & FastAPI setup
+# PTB Application
 # ---------------------------------------------------------------------------
 
-# Build the PTB application (no job queue needed for webhook mode)
 ptb_app = (
     Application.builder()
     .token(BOT_TOKEN)
-    .updater(None)          # disable built-in polling updater
+    .updater(None)
     .build()
 )
 
-# Register handlers
-ptb_app.add_handler(CommandHandler("start", start))
-ptb_app.add_handler(CommandHandler("help", help_command))
+# General
+ptb_app.add_handler(CommandHandler("start",       start))
+ptb_app.add_handler(CommandHandler("help",        help_command))
 
-# FastAPI app
-api = FastAPI(title="Telegram Bot Webhook")
+# Bets
+ptb_app.add_handler(CommandHandler("bet",         bet_command))
+ptb_app.add_handler(CommandHandler("bets",        bets_command))
+
+# Resolve
+ptb_app.add_handler(CommandHandler("claim",       claim_command))
+
+# Stats
+ptb_app.add_handler(CommandHandler("balance",     balance_command))
+ptb_app.add_handler(CommandHandler("ass",         balance_command))
+ptb_app.add_handler(CommandHandler("leaderboard", leaderboard_command))
+ptb_app.add_handler(CommandHandler("history",     history_command))
+
+# Callbacks from inline keyboards
+ptb_app.add_handler(CallbackQueryHandler(bet_callback,     pattern=r"^b[ad]\|"))
+ptb_app.add_handler(CallbackQueryHandler(resolve_callback, pattern=r"^b(c|di)\|"))
+ptb_app.add_handler(CallbackQueryHandler(vote_callback,    pattern=r"^bv\|"))
+
+# Auto-register users who chat (so @mentions work)
+ptb_app.add_handler(
+    MessageHandler(filters.TEXT & ~filters.COMMAND, auto_register)
+)
+
+# ---------------------------------------------------------------------------
+# FastAPI
+# ---------------------------------------------------------------------------
+
+api = FastAPI(title="ЖопоБанк Bot")
 
 
 @api.on_event("startup")
 async def on_startup() -> None:
-    """Initialize PTB and register the webhook with Telegram on startup."""
+    db.init_db()
     await ptb_app.initialize()
     await ptb_app.start()
 
@@ -86,7 +149,6 @@ async def on_startup() -> None:
 
 @api.on_event("shutdown")
 async def on_shutdown() -> None:
-    """Gracefully stop PTB on container shutdown."""
     await ptb_app.stop()
     await ptb_app.shutdown()
     logger.info("Bot shut down gracefully.")
@@ -94,14 +156,12 @@ async def on_shutdown() -> None:
 
 @api.post("/webhook/{token}")
 async def telegram_webhook(token: str, request: Request) -> Response:
-    """Receive updates from Telegram."""
     if token != BOT_TOKEN:
         return Response(status_code=403)
 
-    # Optional: verify the secret header Telegram sends
     if WEBHOOK_SECRET:
-        incoming_secret = request.headers.get("X-Telegram-Bot-Api-Secret-Token", "")
-        if incoming_secret != WEBHOOK_SECRET:
+        incoming = request.headers.get("X-Telegram-Bot-Api-Secret-Token", "")
+        if incoming != WEBHOOK_SECRET:
             return Response(status_code=403)
 
     body = await request.json()
@@ -112,5 +172,4 @@ async def telegram_webhook(token: str, request: Request) -> Response:
 
 @api.get("/health")
 async def health() -> dict:
-    """Health check endpoint used by Azure Container Apps."""
     return {"status": "ok"}
