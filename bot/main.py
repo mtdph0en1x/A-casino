@@ -16,7 +16,10 @@ import database as db
 from handlers.bets import bet_command, bet_callback, bets_command
 from handlers.resolve import claim_command, resolve_callback, vote_callback
 from handlers.stats import balance_command, leaderboard_command, history_command
-from handlers.events import event_command, beton_command, resolve_event_command, event_callback
+from handlers.events import (
+    event_command, beton_command, resolve_event_command, event_callback,
+    events_command, ehistory_command
+)
 
 # ---------------------------------------------------------------------------
 # Logging
@@ -118,6 +121,8 @@ ptb_app.add_handler(CommandHandler("bets",        bets_command))
 
 # Group Events
 ptb_app.add_handler(CommandHandler("event",       event_command))
+ptb_app.add_handler(CommandHandler("events",      events_command))
+ptb_app.add_handler(CommandHandler("ehistory",    ehistory_command))
 ptb_app.add_handler(CommandHandler("beton",       beton_command))
 ptb_app.add_handler(CommandHandler("resolve",     resolve_event_command))
 

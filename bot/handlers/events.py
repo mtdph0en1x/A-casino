@@ -237,3 +237,68 @@ async def resolve_event_command(update: Update, context: ContextTypes.DEFAULT_TY
             f"🏁 <b>Подію #{event_id} завершено!</b>\n"
             f"Ніхто нічого не програв і не виграв."
         )
+
+# ---------------------------------------------------------------------------
+# /events — list active events in this chat
+# ---------------------------------------------------------------------------
+async def events_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    events = db.get_active_events(update.message.chat_id)
+    if not events:
+        await update.message.reply_text("🕊️ Немає відкритих подій. Створи свою: /event")
+        return
+
+    lines = ["📋 <b>Відкриті події:</b>\n"]
+    for event in events:
+        creator = db.get_user(event["creator_id"])
+        bets = db.get_event_bets(event["id"])
+        
+        for_pool = sum(b["amount"] for b in bets if b["side"] == "FOR")
+        against_pool = sum(b["amount"] for b in bets if b["side"] == "AGAINST")
+        
+        lines.append(
+            f"🟢 <b>#{event['id']}</b> {event['description']}\n"
+            f"   👤 {display_name(creator)} | Пул: {fmt(for_pool)} ЗА / {fmt(against_pool)} ПРОТИ\n"
+        )
+
+    await update.message.reply_html("\n".join(lines))
+
+
+# ---------------------------------------------------------------------------
+# /ehistory — list resolved events in this chat
+# ---------------------------------------------------------------------------
+async def ehistory_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    events = db.get_event_history(update.message.chat_id, limit=10)
+    if not events:
+        await update.message.reply_text("📜 Ще не було завершених подій.")
+        return
+
+    lines = ["📜 <b>Останні події:</b>\n━━━━━━━━━━━━━━"]
+    for event in events:
+        creator = db.get_user(event["creator_id"])
+        status = event.get("status", "")
+        
+        resolved = ""
+        if event.get("resolved_at"):
+            try:
+                from datetime import datetime
+                dt = datetime.fromisoformat(event["resolved_at"])
+                resolved = dt.strftime("%d.%m.%Y")
+            except Exception:
+                pass
+
+        if status == "CANCELED":
+            result = "❌ Скасовано"
+        elif status == "RESOLVED_FOR":
+            result = "👍 ЗА"
+        elif status == "RESOLVED_AGAINST":
+            result = "👎 ПРОТИ"
+        else:
+            result = status
+
+        lines.append(
+            f"<b>#{event['id']}</b> {event['description']}\n"
+            f"   👤 Автор: {display_name(creator)}\n"
+            f"   🏁 Перемогло: <b>{result}</b> • {resolved}\n"
+        )
+
+    await update.message.reply_html("\n".join(lines))

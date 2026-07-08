@@ -254,6 +254,22 @@ def get_event(event_id: int):
     results = list(events_client.query_entities(query))
     return _unwrap(results[0]) if results else None
 
+def get_active_events(chat_id: int):
+    query = f"PartitionKey eq '{chat_id}'"
+    results = _unwrap_list(list(events_client.query_entities(query)))
+    return sorted(
+        [e for e in results if e.get("status") == "OPEN"], 
+        key=lambda x: x.get("id", 0), 
+        reverse=True
+    )
+
+def get_event_history(chat_id: int, limit: int = 10):
+    query = f"PartitionKey eq '{chat_id}'"
+    results = _unwrap_list(list(events_client.query_entities(query)))
+    history = [e for e in results if e.get("status") != "OPEN"]
+    history.sort(key=lambda x: x.get("resolved_at", ""), reverse=True)
+    return history[:limit]
+
 def update_event(event_id: int, **fields):
     event = get_event(event_id)
     if event:
