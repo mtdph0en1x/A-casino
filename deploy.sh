@@ -1,15 +1,15 @@
 
 set -euo pipefail
 
-# ── EDIT THESE ──────────────────────────────────────────────────────────────
+
 RESOURCE_GROUP="rg-telegram-bot"
 LOCATION="northeurope"           
 ACR_NAME="tgbotregistry$RANDOM" 
 APP_ENV_NAME="telegram-bot-env"
 APP_NAME="telegram-bot"
-BOT_TOKEN="${BOT_TOKEN:?Please export BOT_TOKEN before running this script}"
+BOT_TOKEN="${BOT_TOKEN:? export BOT_TOKEN}"
 WEBHOOK_SECRET="${WEBHOOK_SECRET:-$(openssl rand -hex 16)}"
-# ────────────────────────────────────────────────────────────────────────────
+
 
 echo " Creating Resource Group: $RESOURCE_GROUP"
 az group create --name "$RESOURCE_GROUP" --location "$LOCATION" --output none
@@ -73,29 +73,10 @@ APP_URL="https://$APP_URL"
 
 echo " App URL: $APP_URL"
 
-# Update WEBHOOK_URL now that we know the URL
+# Update WEBHOOK_URL 
 az containerapp update \
   --name "$APP_NAME" \
   --resource-group "$RESOURCE_GROUP" \
   --set-env-vars "WEBHOOK_URL=$APP_URL" \
   --output none
 
-# ── Print GitHub Actions secrets ────────────────────────────────────────────
-echo ""
-echo " Done! Add these secrets to your GitHub repo"
-echo "   (Settings → Secrets and variables → Actions):"
-echo ""
-echo "   AZURE_CREDENTIALS     = <output of: az ad sp create-for-rbac --sdk-auth>"
-echo "   ACR_NAME              = $ACR_NAME"
-echo "   ACR_SERVER            = $ACR_SERVER"
-echo "   RESOURCE_GROUP        = $RESOURCE_GROUP"
-echo "   APP_NAME              = $APP_NAME"
-echo "   BOT_TOKEN             = $BOT_TOKEN"
-echo "   WEBHOOK_SECRET        = $WEBHOOK_SECRET"
-echo "   WEBHOOK_URL           = $APP_URL"
-echo ""
-echo " Run this to generate AZURE_CREDENTIALS:"
-echo "   az ad sp create-for-rbac --name telegram-bot-sp \\"
-echo "     --role contributor \\"
-echo "     --scopes /subscriptions/\$(az account show --query id -o tsv)/resourceGroups/$RESOURCE_GROUP \\"
-echo "     --sdk-auth"
