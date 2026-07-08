@@ -53,7 +53,11 @@ async def balance_command(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 # ---------------------------------------------------------------------------
 
 async def leaderboard_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    chat_id = update.message.chat_id if update.message.chat_id != update.message.from_user.id else None
+    if update.message.chat_id == update.message.from_user.id:
+        await update.message.reply_text("❌ Рейтинг доступний тільки в групах.")
+        return
+
+    chat_id = update.message.chat_id
     _register(update.message.from_user, chat_id)
     users = db.get_all_users_ranked(chat_id)
 
