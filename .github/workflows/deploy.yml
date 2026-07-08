@@ -67,7 +67,8 @@ jobs:
             --set-env-vars \
               BOT_TOKEN=secretref:bot-token \
               WEBHOOK_SECRET=secretref:webhook-secret \
-              WEBHOOK_URL=${{ secrets.WEBHOOK_URL }}
+              WEBHOOK_URL=${{ secrets.WEBHOOK_URL }} \
+              AZURE_STORAGE_CONNECTION_STRING="${{ secrets.AZURE_STORAGE_CONNECTION_STRING }}"
 
       # ── Health check 
       - name: Health check

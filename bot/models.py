@@ -24,6 +24,6 @@ def fmt(amount: float) -> str:
 
 def display_name(user_row) -> str:
     """Best display name for a user row."""
-    if user_row["username"]:
+    if user_row.get("username"):
         return f"@{user_row['username']}"
-    return user_row["first_name"]
+    return user_row.get("first_name", "")

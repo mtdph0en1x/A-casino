@@ -1,116 +1,98 @@
 import os
-import sqlite3
-from contextlib import contextmanager
+import random
 from datetime import datetime
 from typing import Optional
+from enum import Enum
+from azure.data.tables import TableServiceClient, UpdateMode
+from azure.core.exceptions import ResourceNotFoundError
 
 # ---------------------------------------------------------------------------
 # Config
 # ---------------------------------------------------------------------------
-# Mount an Azure File Share at /data for persistence across redeploys.
-# Without it, data resets when the container restarts (fine for dev/testing).
-DB_PATH = os.environ.get("DB_PATH", "bot.db")
+CONN_STR = os.environ.get("AZURE_STORAGE_CONNECTION_STRING")
 
-
-# ---------------------------------------------------------------------------
-# Connection
-# ---------------------------------------------------------------------------
-@contextmanager
-def get_db():
-    db_dir = os.path.dirname(DB_PATH)
-    if db_dir:
-        os.makedirs(db_dir, exist_ok=True)
-    conn = sqlite3.connect(DB_PATH, timeout=30)  # timeout handles lock contention
-    conn.row_factory = sqlite3.Row
-    # NOTE: WAL mode is intentionally omitted — it's incompatible with Azure File Share (SMB)
-    conn.execute("PRAGMA foreign_keys=ON")
-    try:
-        yield conn
-        conn.commit()
-    except Exception:
-        conn.rollback()
-        raise
-    finally:
-        conn.close()
-
+# Clients
+table_service_client = None
+users_client = None
+bets_client = None
+votes_client = None
 
 # ---------------------------------------------------------------------------
 # Schema init
 # ---------------------------------------------------------------------------
 def init_db() -> None:
-    with get_db() as db:
-        db.executescript("""
-            CREATE TABLE IF NOT EXISTS users (
-                user_id    INTEGER PRIMARY KEY,
-                username   TEXT,
-                first_name TEXT    NOT NULL,
-                balance    REAL    NOT NULL DEFAULT 1.0
-            );
+    if not CONN_STR:
+        print("Warning: AZURE_STORAGE_CONNECTION_STRING not set!")
+        return
 
-            CREATE TABLE IF NOT EXISTS bets (
-                id                  INTEGER PRIMARY KEY AUTOINCREMENT,
-                chat_id             INTEGER NOT NULL,
-                proposer_id         INTEGER NOT NULL REFERENCES users(user_id),
-                opponent_id         INTEGER NOT NULL REFERENCES users(user_id),
-                amount              REAL    NOT NULL,
-                description         TEXT    NOT NULL,
-                status              TEXT    NOT NULL DEFAULT 'PROPOSED',
-                claimer_id          INTEGER REFERENCES users(user_id),
-                claim_message_id    INTEGER,
-                proposal_message_id INTEGER,
-                created_at          TEXT    NOT NULL,
-                resolved_at         TEXT
-            );
+    global table_service_client, users_client, bets_client, votes_client
+    table_service_client = TableServiceClient.from_connection_string(conn_str=CONN_STR)
+    
+    # Ensure tables exist
+    for table_name in ["users", "bets", "votes"]:
+        table_client = table_service_client.get_table_client(table_name)
+        try:
+            table_client.create_table()
+        except Exception:
+            pass # Table already exists
 
-            CREATE TABLE IF NOT EXISTS votes (
-                bet_id       INTEGER NOT NULL REFERENCES bets(id),
-                voter_id     INTEGER NOT NULL REFERENCES users(user_id),
-                voted_for_id INTEGER NOT NULL REFERENCES users(user_id),
-                PRIMARY KEY (bet_id, voter_id)
-            );
-        """)
+    users_client = table_service_client.get_table_client("users")
+    bets_client = table_service_client.get_table_client("bets")
+    votes_client = table_service_client.get_table_client("votes")
 
 
 # ---------------------------------------------------------------------------
 # User operations
 # ---------------------------------------------------------------------------
 def get_or_create_user(user_id: int, username: Optional[str], first_name: str):
-    with get_db() as db:
-        db.execute(
-            "INSERT OR IGNORE INTO users (user_id, username, first_name) VALUES (?, ?, ?)",
-            (user_id, username, first_name),
-        )
-        # Always keep username/name fresh
-        db.execute(
-            "UPDATE users SET username=?, first_name=? WHERE user_id=?",
-            (username, first_name, user_id),
-        )
-    return get_user(user_id)
-
+    try:
+        user = users_client.get_entity(partition_key="Users", row_key=str(user_id))
+        if user.get("username") != username or user.get("first_name") != first_name:
+            user["username"] = username or ""
+            user["first_name"] = first_name
+            users_client.upsert_entity(user)
+        return user
+    except ResourceNotFoundError:
+        user = {
+            "PartitionKey": "Users",
+            "RowKey": str(user_id),
+            "user_id": user_id,
+            "username": username or "",
+            "first_name": first_name,
+            "balance": 1.0
+        }
+        users_client.upsert_entity(user)
+        return user
 
 def get_user(user_id: int):
-    with get_db() as db:
-        return db.execute("SELECT * FROM users WHERE user_id=?", (user_id,)).fetchone()
-
+    try:
+        return users_client.get_entity(partition_key="Users", row_key=str(user_id))
+    except ResourceNotFoundError:
+        return None
 
 def get_user_by_username(username: str):
-    with get_db() as db:
-        return db.execute(
-            "SELECT * FROM users WHERE LOWER(username)=LOWER(?)", (username,)
-        ).fetchone()
-
+    if not username: return None
+    username_clean = username.lstrip("@").lower()
+    
+    users = list(users_client.query_entities(""))
+    for u in users:
+        if u.get("username") and u["username"].lower() == username_clean:
+            return u
+    return None
 
 def get_all_users_ranked():
-    with get_db() as db:
-        return db.execute(
-            "SELECT * FROM users ORDER BY balance DESC"
-        ).fetchall()
-
+    users = list(users_client.query_entities(""))
+    users.sort(key=lambda x: x.get("balance", 0.0), reverse=True)
+    return users
 
 def transfer_balance(winner_id: int, loser_id: int, amount: float) -> None:
-    with get_db() as db:
-        db.execute("UPDATE users SET balance=balance+? WHERE user_id=?", (amount, winner_id))
-        db.execute("UPDATE users SET balance=balance-? WHERE user_id=?", (amount, loser_id))
+    winner = get_user(winner_id)
+    loser = get_user(loser_id)
+    if winner and loser:
+        winner["balance"] += amount
+        loser["balance"] -= amount
+        users_client.upsert_entity(winner)
+        users_client.upsert_entity(loser)
 
 
 # ---------------------------------------------------------------------------
@@ -123,72 +105,81 @@ def create_bet(
     amount: float,
     description: str,
 ) -> int:
-    with get_db() as db:
-        cur = db.execute(
-            """INSERT INTO bets
-               (chat_id, proposer_id, opponent_id, amount, description, created_at)
-               VALUES (?, ?, ?, ?, ?, ?)""",
-            (chat_id, proposer_id, opponent_id, amount, description,
-             datetime.utcnow().isoformat()),
-        )
-        return cur.lastrowid
+    bet_id = random.randint(100000, 999999)
+    # Ensure ID uniqueness
+    while True:
+        try:
+            bets_client.get_entity(partition_key=str(chat_id), row_key=str(bet_id))
+            bet_id = random.randint(100000, 999999)
+        except ResourceNotFoundError:
+            break
 
+    bet = {
+        "PartitionKey": str(chat_id),
+        "RowKey": str(bet_id),
+        "id": bet_id,
+        "chat_id": chat_id,
+        "proposer_id": proposer_id,
+        "opponent_id": opponent_id,
+        "amount": float(amount),
+        "description": description,
+        "status": "PROPOSED",
+        "created_at": datetime.utcnow().isoformat(),
+        "resolved_at": ""
+    }
+    bets_client.upsert_entity(bet)
+    return bet_id
 
 def get_bet(bet_id: int):
-    with get_db() as db:
-        return db.execute("SELECT * FROM bets WHERE id=?", (bet_id,)).fetchone()
-
+    query = f"RowKey eq '{bet_id}'"
+    results = list(bets_client.query_entities(query))
+    return results[0] if results else None
 
 def get_active_bets(chat_id: int):
-    with get_db() as db:
-        return db.execute(
-            """SELECT * FROM bets
-               WHERE chat_id=? AND status IN ('PROPOSED','ACTIVE','CLAIMED','DISPUTED')
-               ORDER BY id DESC""",
-            (chat_id,),
-        ).fetchall()
-
+    query = f"PartitionKey eq '{chat_id}'"
+    results = list(bets_client.query_entities(query))
+    active_statuses = {"PROPOSED", "ACTIVE", "CLAIMED", "DISPUTED"}
+    return sorted(
+        [b for b in results if b.get("status") in active_statuses], 
+        key=lambda x: x.get("id", 0), 
+        reverse=True
+    )
 
 def get_bet_history(chat_id: int, limit: int = 10):
-    with get_db() as db:
-        return db.execute(
-            """SELECT * FROM bets
-               WHERE chat_id=? AND status IN ('CONFIRMED','DECLINED')
-               ORDER BY resolved_at DESC LIMIT ?""",
-            (chat_id, limit),
-        ).fetchall()
-
+    query = f"PartitionKey eq '{chat_id}'"
+    results = list(bets_client.query_entities(query))
+    resolved_statuses = {"CONFIRMED", "DECLINED"}
+    history = [b for b in results if b.get("status") in resolved_statuses]
+    history.sort(key=lambda x: x.get("resolved_at", ""), reverse=True)
+    return history[:limit]
 
 def update_bet(bet_id: int, **fields) -> None:
-    """Generic update: update_bet(3, status='ACTIVE', proposal_message_id=42)"""
-    with get_db() as db:
-        set_clause = ", ".join(f"{k}=?" for k in fields)
-        db.execute(
-            f"UPDATE bets SET {set_clause} WHERE id=?",
-            list(fields.values()) + [bet_id],
-        )
+    bet = get_bet(bet_id)
+    if bet:
+        for k, v in fields.items():
+            if v is None:
+                continue
+            if isinstance(v, Enum):
+                v = v.value
+            bet[k] = v
+        bets_client.upsert_entity(bet)
 
 
 # ---------------------------------------------------------------------------
 # Vote operations
 # ---------------------------------------------------------------------------
 def add_vote(bet_id: int, voter_id: int, voted_for_id: int) -> None:
-    with get_db() as db:
-        db.execute(
-            "INSERT OR REPLACE INTO votes (bet_id, voter_id, voted_for_id) VALUES (?,?,?)",
-            (bet_id, voter_id, voted_for_id),
-        )
-
+    vote = {
+        "PartitionKey": str(bet_id),
+        "RowKey": str(voter_id),
+        "voted_for_id": voted_for_id
+    }
+    votes_client.upsert_entity(vote)
 
 def get_votes(bet_id: int):
-    with get_db() as db:
-        return db.execute("SELECT * FROM votes WHERE bet_id=?", (bet_id,)).fetchall()
-
+    query = f"PartitionKey eq '{bet_id}'"
+    return list(votes_client.query_entities(query))
 
 def count_votes_for(bet_id: int, candidate_id: int) -> int:
-    with get_db() as db:
-        row = db.execute(
-            "SELECT COUNT(*) FROM votes WHERE bet_id=? AND voted_for_id=?",
-            (bet_id, candidate_id),
-        ).fetchone()
-        return row[0]
+    votes = get_votes(bet_id)
+    return sum(1 for v in votes if v.get("voted_for_id") == candidate_id)
