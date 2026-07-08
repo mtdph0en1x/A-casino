@@ -7,6 +7,7 @@ on:
 
 env:
   IMAGE_NAME: telegram-bot
+  REGISTRY: ghcr.io
 
 jobs:
   build-and-deploy:
@@ -14,53 +15,68 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
+      packages: write   # allows pushing to ghcr.io
 
     steps:
-      # ── Checkout ────────────────────────────────────────────────────────
+      # ── Checkout 
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      # ── Azure login ─────────────────────────────────────────────────────
+      # ── Login to GitHub Container Registry 
+      - name: Log in to GHCR
+        run: |
+          echo "${{ secrets.GHCR_TOKEN }}" | docker login ghcr.io \
+            -u "${{ secrets.GHCR_USERNAME }}" --password-stdin
+
+      # ── Build & push image to GHCR 
+      - name: Build and push Docker image
+        run: |
+          IMAGE_TAG=${{ env.REGISTRY }}/${{ secrets.GHCR_USERNAME }}/${{ env.IMAGE_NAME }}
+          docker build \
+            -t $IMAGE_TAG:${{ github.sha }} \
+            -t $IMAGE_TAG:latest \
+            ./bot
+          docker push $IMAGE_TAG:${{ github.sha }}
+          docker push $IMAGE_TAG:latest
+
+      # ── Azure login 
       - name: Log in to Azure
         uses: azure/login@v2
         with:
           creds: ${{ secrets.AZURE_CREDENTIALS }}
 
-      # ── Login to ACR ────────────────────────────────────────────────────
-      - name: Log in to ACR
+      # ── Register GHCR credentials with Container App 
+      - name: Set GHCR registry credentials
         run: |
-          az acr login --name ${{ secrets.ACR_NAME }}
+          az containerapp registry set \
+            --name ${{ secrets.APP_NAME }} \
+            --resource-group ${{ secrets.RESOURCE_GROUP }} \
+            --server ghcr.io \
+            --username ${{ secrets.GHCR_USERNAME }} \
+            --password ${{ secrets.GHCR_TOKEN }}
 
-      # ── Build & push image with Docker ──────────────────────────────────
-      - name: Build and push Docker image
-        run: |
-          docker build \
-            -t ${{ secrets.ACR_SERVER }}/${{ env.IMAGE_NAME }}:${{ github.sha }} \
-            -t ${{ secrets.ACR_SERVER }}/${{ env.IMAGE_NAME }}:latest \
-            ./bot
-          docker push ${{ secrets.ACR_SERVER }}/${{ env.IMAGE_NAME }}:${{ github.sha }}
-          docker push ${{ secrets.ACR_SERVER }}/${{ env.IMAGE_NAME }}:latest
-
-      # ── Deploy to Container Apps ─────────────────────────────────────────
+      # ── Deploy new image
       - name: Deploy to Azure Container Apps
         run: |
           az containerapp update \
             --name ${{ secrets.APP_NAME }} \
             --resource-group ${{ secrets.RESOURCE_GROUP }} \
-            --image ${{ secrets.ACR_SERVER }}/${{ env.IMAGE_NAME }}:${{ github.sha }} \
+            --image ${{ env.REGISTRY }}/${{ secrets.GHCR_USERNAME }}/${{ env.IMAGE_NAME }}:${{ github.sha }} \
+            --min-replicas 0 \
+            --max-replicas 3 \
             --set-env-vars \
               BOT_TOKEN=secretref:bot-token \
               WEBHOOK_SECRET=secretref:webhook-secret \
               WEBHOOK_URL=${{ secrets.WEBHOOK_URL }}
 
-      # ── Health check ─────────────────────────────────────────────────────
+      # ── Health check 
       - name: Health check
         run: |
-          sleep 10
+          sleep 20
           STATUS=$(curl -s -o /dev/null -w "%{http_code}" ${{ secrets.WEBHOOK_URL }}/health)
           echo "Health check status: $STATUS"
           if [ "$STATUS" != "200" ]; then
-            echo "❌ Health check failed!"
+            echo "Health check failed!"
             exit 1
           fi
-          echo "✅ Bot is healthy!"
+          echo "Bot is healthy!"
