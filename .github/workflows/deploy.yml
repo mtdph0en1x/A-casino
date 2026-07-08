@@ -26,14 +26,20 @@ jobs:
         with:
           creds: ${{ secrets.AZURE_CREDENTIALS }}
 
-      # ── Build & push image to ACR ────────────────────────────────────────
-      - name: Build and push image via ACR Tasks
+      # ── Login to ACR ────────────────────────────────────────────────────
+      - name: Log in to ACR
         run: |
-          az acr build \
-            --registry ${{ secrets.ACR_NAME }} \
-            --image ${{ env.IMAGE_NAME }}:${{ github.sha }} \
-            --image ${{ env.IMAGE_NAME }}:latest \
+          az acr login --name ${{ secrets.ACR_NAME }}
+
+      # ── Build & push image with Docker ──────────────────────────────────
+      - name: Build and push Docker image
+        run: |
+          docker build \
+            -t ${{ secrets.ACR_SERVER }}/${{ env.IMAGE_NAME }}:${{ github.sha }} \
+            -t ${{ secrets.ACR_SERVER }}/${{ env.IMAGE_NAME }}:latest \
             ./bot
+          docker push ${{ secrets.ACR_SERVER }}/${{ env.IMAGE_NAME }}:${{ github.sha }}
+          docker push ${{ secrets.ACR_SERVER }}/${{ env.IMAGE_NAME }}:latest
 
       # ── Deploy to Container Apps ─────────────────────────────────────────
       - name: Deploy to Azure Container Apps
