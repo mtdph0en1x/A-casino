@@ -15,8 +15,8 @@ logger = logging.getLogger(__name__)
 MEDALS = ["🥇", "🥈", "🥉"]
 
 
-def _register(tg_user):
-    return db.get_or_create_user(tg_user.id, tg_user.username, tg_user.first_name)
+def _register(tg_user, chat_id=None):
+    return db.get_or_create_user(tg_user.id, tg_user.username, tg_user.first_name, chat_id)
 
 
 # ---------------------------------------------------------------------------
@@ -24,7 +24,8 @@ def _register(tg_user):
 # ---------------------------------------------------------------------------
 
 async def balance_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    user = _register(update.message.from_user)
+    chat_id = update.message.chat_id if update.message.chat_id != update.message.from_user.id else None
+    user = _register(update.message.from_user, chat_id)
     balance = user["balance"]
 
     if balance > 1.5:
@@ -52,8 +53,9 @@ async def balance_command(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 # ---------------------------------------------------------------------------
 
 async def leaderboard_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    _register(update.message.from_user)
-    users = db.get_all_users_ranked()
+    chat_id = update.message.chat_id if update.message.chat_id != update.message.from_user.id else None
+    _register(update.message.from_user, chat_id)
+    users = db.get_all_users_ranked(chat_id)
 
     if not users:
         await update.message.reply_text("Ще нікого нема! Напиши /start щоб зареєструватись.")
@@ -76,7 +78,8 @@ async def leaderboard_command(update: Update, context: ContextTypes.DEFAULT_TYPE
 # ---------------------------------------------------------------------------
 
 async def history_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    _register(update.message.from_user)
+    chat_id = update.message.chat_id if update.message.chat_id != update.message.from_user.id else None
+    _register(update.message.from_user, chat_id)
     bets = db.get_bet_history(update.message.chat_id, limit=10)
 
     if not bets:

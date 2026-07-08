@@ -16,8 +16,8 @@ logger = logging.getLogger(__name__)
 # Helpers
 # ---------------------------------------------------------------------------
 
-def _register(tg_user) -> dict:
-    return db.get_or_create_user(tg_user.id, tg_user.username, tg_user.first_name)
+def _register(tg_user, chat_id=None):
+    return db.get_or_create_user(tg_user.id, tg_user.username, tg_user.first_name, chat_id)
 
 
 def _extract_opponent(message) -> Optional[dict]:
@@ -47,7 +47,8 @@ def _proposal_keyboard(bet_id: int) -> InlineKeyboardMarkup:
 
 async def bet_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     msg = update.message
-    user = _register(msg.from_user)
+    chat_id = msg.chat_id if msg.chat_id != msg.from_user.id else None
+    user = _register(msg.from_user, chat_id)
 
     opponent = _extract_opponent(msg)
     if not opponent:
@@ -124,7 +125,8 @@ async def bet_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         await query.edit_message_text("❌ Парі не знайдено.")
         return
 
-    user = _register(query.from_user)
+    chat_id = query.message.chat_id if query.message.chat_id != query.from_user.id else None
+    user = _register(query.from_user, chat_id)
     uid = user["user_id"]
 
     # Only the opponent can respond to the proposal

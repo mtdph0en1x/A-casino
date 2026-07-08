@@ -10,8 +10,13 @@ from models import fmt, display_name
 
 logger = logging.getLogger(__name__)
 
-def _register(tg_user):
-    return db.get_or_create_user(tg_user.id, tg_user.username, tg_user.first_name)
+def _register(tg_user, chat_id):
+    return db.get_or_create_user(
+        tg_user.id, 
+        tg_user.username, 
+        tg_user.first_name,
+        chat_id if chat_id != tg_user.id else None
+    )
 
 def _event_keyboard(event_id: int) -> InlineKeyboardMarkup:
     # Instead of inline queries, we just use simple callback alerts telling them what to type.
@@ -58,7 +63,7 @@ def _render_event_text(event: dict, bets: list, creator: dict) -> str:
 # ---------------------------------------------------------------------------
 async def event_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     msg = update.message
-    user = _register(msg.from_user)
+    user = _register(msg.from_user, msg.chat_id)
 
     description = " ".join(context.args).strip()
     if not description:
@@ -95,7 +100,7 @@ async def event_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 # ---------------------------------------------------------------------------
 async def beton_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     msg = update.message
-    user = _register(msg.from_user)
+    user = _register(msg.from_user, msg.chat_id)
     
     args = context.args or []
     if len(args) < 3:
@@ -167,7 +172,7 @@ async def beton_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
 # ---------------------------------------------------------------------------
 async def resolve_event_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     msg = update.message
-    user = _register(msg.from_user)
+    user = _register(msg.from_user, msg.chat_id)
 
     args = context.args or []
     if len(args) < 2:

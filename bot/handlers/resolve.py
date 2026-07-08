@@ -13,8 +13,8 @@ from models import BetStatus, MIN_VOTES_TO_RESOLVE, fmt, display_name
 logger = logging.getLogger(__name__)
 
 
-def _register(tg_user):
-    return db.get_or_create_user(tg_user.id, tg_user.username, tg_user.first_name)
+def _register(tg_user, chat_id=None):
+    return db.get_or_create_user(tg_user.id, tg_user.username, tg_user.first_name, chat_id)
 
 
 def _confirm_keyboard(bet_id: int) -> InlineKeyboardMarkup:
@@ -45,7 +45,8 @@ def _vote_keyboard(bet_id: int, proposer, opponent) -> InlineKeyboardMarkup:
 
 async def claim_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     msg = update.message
-    user = _register(msg.from_user)
+    chat_id = msg.chat_id if msg.chat_id != msg.from_user.id else None
+    user = _register(msg.from_user, chat_id)
 
     if not context.args:
         await msg.reply_text("❌ Вкажи номер парі: /claim <id>")
@@ -109,7 +110,8 @@ async def resolve_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         await query.answer("Це парі вже вирішено.", show_alert=True)
         return
 
-    user = _register(query.from_user)
+    chat_id = query.message.chat_id if query.message.chat_id != query.from_user.id else None
+    user = _register(query.from_user, chat_id)
     uid = user["user_id"]
 
     # Only the non-claimer participant can confirm/dispute
@@ -187,7 +189,8 @@ async def vote_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         await query.answer("Голосування вже закрито.", show_alert=True)
         return
 
-    user = _register(query.from_user)
+    chat_id = query.message.chat_id if query.message.chat_id != query.from_user.id else None
+    user = _register(query.from_user, chat_id)
     uid = user["user_id"]
 
     # Participants cannot vote in their own dispute

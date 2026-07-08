@@ -46,6 +46,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         update.effective_user.id,
         update.effective_user.username,
         update.effective_user.first_name,
+        update.effective_chat.id if update.effective_chat else None
     )
     await update.message.reply_html(
         f"👋 Привіт, <b>{update.effective_user.first_name}</b>!\n\n"
@@ -71,7 +72,6 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         "/resolve &lt;id&gt; за — завершити (автор)\n\n"
         "<b>Статистика:</b>\n"
         "/balance — твій баланс\n"
-        "/ass — теж баланс 😄\n"
         "/leaderboard — рейтинг\n"
         "/history — минулі парі\n\n"
         "<b>Як це працює:</b>\n"
@@ -91,13 +91,14 @@ async def auto_register(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     if not u:
         return
 
-    # Skip DB call if we already verified this user recently
-    cached = _seen_users.get(u.id)
+    # Skip DB call if we already verified this user recently in this chat
+    chat_id = update.effective_chat.id if update.effective_chat else None
+    cached = _seen_users.get((u.id, chat_id))
     if cached == (u.username, u.first_name):
         return
 
-    db.get_or_create_user(u.id, u.username, u.first_name)
-    _seen_users[u.id] = (u.username, u.first_name)
+    db.get_or_create_user(u.id, u.username, u.first_name, chat_id)
+    _seen_users[(u.id, chat_id)] = (u.username, u.first_name)
 
 
 # ---------------------------------------------------------------------------
@@ -131,7 +132,6 @@ ptb_app.add_handler(CommandHandler("claim",       claim_command))
 
 # Stats
 ptb_app.add_handler(CommandHandler("balance",     balance_command))
-ptb_app.add_handler(CommandHandler("ass",         balance_command))
 ptb_app.add_handler(CommandHandler("leaderboard", leaderboard_command))
 ptb_app.add_handler(CommandHandler("history",     history_command))
 

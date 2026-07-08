@@ -80,23 +80,37 @@ def init_db() -> None:
 # ---------------------------------------------------------------------------
 # User operations
 # ---------------------------------------------------------------------------
-def get_or_create_user(user_id: int, username: Optional[str], first_name: str):
+def get_or_create_user(user_id: int, username: Optional[str], first_name: str, chat_id: Optional[int] = None):
     try:
         user = users_client.get_entity(partition_key="Users", row_key=str(user_id))
         user = _unwrap(user)
+        changed = False
+        
         if user.get("username") != username or user.get("first_name") != first_name:
             user["username"] = username or ""
             user["first_name"] = first_name
+            changed = True
+            
+        if chat_id:
+            chats = user.get("chats", "")
+            chat_str = str(chat_id)
+            if chat_str not in chats.split(","):
+                user["chats"] = f"{chats},{chat_str}" if chats else chat_str
+                changed = True
+                
+        if changed:
             users_client.upsert_entity(_safe(user))
         return user
     except ResourceNotFoundError:
+        chats = str(chat_id) if chat_id else ""
         user = {
             "PartitionKey": "Users",
             "RowKey": str(user_id),
             "user_id": user_id,
             "username": username or "",
             "first_name": first_name,
-            "balance": 1.0
+            "balance": 1.0,
+            "chats": chats
         }
         users_client.upsert_entity(_safe(user))
         return _unwrap(user)
@@ -118,8 +132,11 @@ def get_user_by_username(username: str):
             return u
     return None
 
-def get_all_users_ranked():
+def get_all_users_ranked(chat_id: Optional[int] = None):
     users = _unwrap_list(list(users_client.list_entities()))
+    if chat_id:
+        chat_str = str(chat_id)
+        users = [u for u in users if chat_str in u.get("chats", "").split(",")]
     users.sort(key=lambda x: x.get("balance", 0.0), reverse=True)
     return users
 
