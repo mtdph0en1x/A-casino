@@ -84,15 +84,50 @@ async def event_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
 async def event_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     query = update.callback_query
     parts = query.data.split("|")
-    side = parts[1]
-    event_id_str = parts[2]
+    side = parts[1].upper()
+    event_id = int(parts[2])
     
-    side_ua = "за" if side == "for" else "проти"
+    user = _register(query.from_user, query.message.chat_id)
+    amount = 0.25
+
+    event = db.get_event(event_id)
+    if not event or event.get("chat_id") != query.message.chat_id:
+        await query.answer("❌ Подія не знайдена в цьому чаті.", show_alert=True)
+        return
+        
+    if event.get("status") != "OPEN":
+        await query.answer("❌ Ставки на цю подію вже закриті.", show_alert=True)
+        return
+
+    # Check for existing bet to increment, or prevent betting on both sides
+    existing_bets = db.get_event_bets(event_id)
+    existing_bet = next((b for b in existing_bets if b["user_id"] == user["user_id"]), None)
     
-    await query.answer(
-        text=f"👇 Щоб поставити, напиши в чат:\n\n/beton {event_id_str} {side_ua} 0.5",
-        show_alert=True
-    )
+    if existing_bet:
+        if existing_bet["side"] == side:
+            amount += existing_bet["amount"]
+        else:
+            await query.answer("❌ Ти вже поставив на іншу сторону!", show_alert=True)
+            return
+
+    db.place_event_bet(event_id, user["user_id"], side, amount)
+    
+    side_ua = "ЗА" if side == "FOR" else "ПРОТИ"
+    await query.answer(f"✅ Твоя ставка на {side_ua} тепер {amount}!")
+
+    # Update the event message
+    bets = db.get_event_bets(event_id)
+    creator = db.get_user(event["creator_id"])
+    new_text = _render_event_text(event, bets, creator)
+    
+    try:
+        await query.edit_message_text(
+            text=new_text,
+            parse_mode="HTML",
+            reply_markup=_event_keyboard(event_id)
+        )
+    except Exception as e:
+        logger.error(f"Failed to update event message: {e}")
 
 
 # ---------------------------------------------------------------------------
@@ -253,6 +288,8 @@ async def events_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         return
 
     lines = ["📋 <b>Відкриті події:</b>\n"]
+    keyboard = []
+    
     for event in events:
         creator = db.get_user(event["creator_id"])
         bets = db.get_event_bets(event["id"])
@@ -264,8 +301,31 @@ async def events_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             f"🟢 <b>#{event['id']}</b> {event['description']}\n"
             f"   👤 {display_name(creator)} | Пул: {fmt(for_pool)} ЗА / {fmt(against_pool)} ПРОТИ\n"
         )
+        keyboard.append([InlineKeyboardButton(f"Відкрити #{event['id']}", callback_data=f"sev|{event['id']}")])
 
-    await update.message.reply_html("\n".join(lines))
+    await update.message.reply_html("\n".join(lines), reply_markup=InlineKeyboardMarkup(keyboard))
+
+# ---------------------------------------------------------------------------
+# Callbacks — click Відкрити подію
+# ---------------------------------------------------------------------------
+async def show_event_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    query = update.callback_query
+    event_id = int(query.data.split("|")[1])
+    
+    event = db.get_event(event_id)
+    if not event or event.get("chat_id") != query.message.chat_id:
+        await query.answer("❌ Подія не знайдена в цьому чаті.", show_alert=True)
+        return
+        
+    bets = db.get_event_bets(event_id)
+    creator = db.get_user(event["creator_id"])
+    text = _render_event_text(event, bets, creator)
+    
+    # Send a new message with the event details and buttons
+    sent = await query.message.reply_html(text, reply_markup=_event_keyboard(event_id))
+    db.update_event(event_id, message_id=sent.message_id)
+    
+    await query.answer()
 
 
 # ---------------------------------------------------------------------------

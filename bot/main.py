@@ -18,7 +18,7 @@ from handlers.resolve import claim_command, resolve_callback, vote_callback
 from handlers.stats import balance_command, leaderboard_command, history_command
 from handlers.events import (
     event_command, beton_command, resolve_event_command, event_callback,
-    events_command, ehistory_command
+    events_command, ehistory_command, show_event_callback
 )
 
 # ---------------------------------------------------------------------------
@@ -140,6 +140,7 @@ ptb_app.add_handler(CallbackQueryHandler(bet_callback,     pattern=r"^b[ad]\|"))
 ptb_app.add_handler(CallbackQueryHandler(resolve_callback, pattern=r"^b(c|di)\|"))
 ptb_app.add_handler(CallbackQueryHandler(vote_callback,    pattern=r"^bv\|"))
 ptb_app.add_handler(CallbackQueryHandler(event_callback,   pattern=r"^ev\|"))
+ptb_app.add_handler(CallbackQueryHandler(show_event_callback, pattern=r"^sev\|"))
 
 # Auto-register users who chat (so @mentions work)
 ptb_app.add_handler(
